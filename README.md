@@ -60,7 +60,7 @@ the page; the admin API is not available.
 
 ## Artist data
 
-> `data/artists.json` contains **379 Hungarian artists** (snapshot of 2026-10-28). The artist pool comes from the
+> `data/artists.json` contains **413 Hungarian artists**. The artist pool comes from the
 > Hungarian Spotify charts on [kworb.net](https://kworb.net/spotify/country/hu_daily.html) (daily chart + all-time
 > daily/weekly totals), plus retro/"oldies" acts from the
 > [103 népszerű retro magyar dal](http://reginagyslagerek.network.hu/blog/regi-nagy-slagerek-blogja/103-nepszeru-retro-magyar-dal)
@@ -108,6 +108,47 @@ Valid regions: Közép-Magyarország, Közép-Dunántúl, Nyugat-Dunántúl, Dé
 After editing the JSON run `npm run db:seed`. Note: the daily answer order is a deterministic shuffle of the
 artist pool, so changing the pool changes which artist belongs to which day.
 
+Schema v4 adds an optional `spotifyId` (the artist's Spotify ID, used by the admin portal to refresh data).
+
+### Admin portal
+
+A local web UI for browsing, editing, deleting and adding artists, with optional AI-assisted filling of
+selected rows. It is **not** part of the GitHub Pages build.
+
+1. Create a `.env` file in the repository root (it is git-ignored):
+
+   | Variable | |
+   |---|---|
+   | `ADMIN_TOKEN` | required – password of the portal / admin API |
+   | `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET` | optional – [Spotify app](https://developer.spotify.com/dashboard) credentials for search and release dates |
+   | `AI_MODEL` | optional – Copilot model name (default: Copilot's default) |
+   | `COPILOT_GITHUB_TOKEN` | optional – GitHub token for Copilot; otherwise the logged-in Copilot CLI user is used |
+   | `AI_DISABLED=1` | turn the AI off |
+   | `EXPORT_SEED=0` | don't write changes back to `data/artists.json` |
+
+2. AI filling uses GitHub Copilot through [`@github/copilot-sdk`](https://github.com/github/copilot-sdk) (needs a
+   Copilot subscription). Log in once with `npx @github/copilot login`.
+3. Run `npm run dev` and open <http://localhost:5173/admin> (or `npm run build && npm start` →
+   <http://localhost:3001/admin>).
+
+Every change is written to the database **and** to `data/artists.json`, so commit and push the JSON to
+update the GitHub Pages version.
+
+How the "fill" proposals work (nothing is saved until you accept them in the review panel):
+
+- **Spotify ID** – looked up on Wikidata (P1902) and MusicBrainz first (limited to Hungarian/neighbouring
+  countries), falling back to Spotify search.
+- **Monthly listeners and image** – read from the public Spotify artist page.
+- **Debut year** – the year of the oldest release on Spotify, only used when the year is missing or the
+  Spotify year is *earlier* (reissues and compilations make Spotify's oldest release unreliable for oldies).
+- **Other attributes and hints** – Spotify's API does not expose the artist biography, so the AI reads the
+  Hungarian/English Wikipedia articles (and Spotify releases/top tracks). Each hint must cite a verbatim quote
+  from these sources; hints whose quote or title can't be found there are dropped and shown as warnings.
+
+Spotify apps in development mode have a low rate limit. When Spotify answers with a long `Retry-After`
+(it can be ~24 hours), the portal shows ⏳ and skips Spotify-API-based data until then; listeners and images
+still work.
+
 ### Admin API
 
 Like the original [spotle-backend](https://github.com/alexski/spotle-backend), artists can be managed over
@@ -121,6 +162,9 @@ REST. Set `ADMIN_TOKEN` and send `Authorization: Bearer <token>`:
 | PUT | `/api/admin/artists/:id` | update |
 | DELETE | `/api/admin/artists/:id` | delete |
 | POST | `/api/admin/reseed` | reload from `data/artists.json` |
+| GET | `/api/admin/meta` | regions, genres, hint types, Spotify/AI status |
+| GET | `/api/admin/spotify/search?q=` | search Spotify artists |
+| POST | `/api/admin/propose` | `{ artistId?, name?, spotifyId?, ai? }` → suggested values (not saved) |
 
 ### Public game API
 

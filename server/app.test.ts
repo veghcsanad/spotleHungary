@@ -73,6 +73,7 @@ describe('API', () => {
     const repo = new ArtistRepository(db);
     const created = repo.create({
       name: 'Ismeretlen',
+      spotifyId: null,
       debutYear: null,
       members: null,
       gender: null,
@@ -89,7 +90,20 @@ describe('API', () => {
       hint3: null,
     });
     expect(created).toMatchObject({ debutYear: null, gender: null, region: null });
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+  });
+
+  it('migrates a v3 database by adding the spotify_id column', () => {
+    const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+    const db = new DatabaseSync(':memory:');
+    db.exec(`CREATE TABLE artist (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, debut_year INTEGER, members INTEGER,
+      gender TEXT, genre TEXT, city TEXT, region TEXT, monthly_listeners INTEGER NOT NULL DEFAULT 0, image_url TEXT,
+      hint1_type TEXT, hint1 TEXT, hint2_type TEXT, hint2 TEXT, hint3_type TEXT, hint3 TEXT,
+      last_checked TEXT NOT NULL DEFAULT (datetime('now')));
+      INSERT INTO artist (name, debut_year) VALUES ('Régi', 1990);
+      PRAGMA user_version = 3;`);
+    const [artist] = new ArtistRepository(db).list();
+    expect(artist).toMatchObject({ name: 'Régi', debutYear: 1990, spotifyId: null });
   });
   it('lists artists without exposing attributes', async () => {
     const { app } = setup();

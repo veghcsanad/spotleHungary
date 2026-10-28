@@ -5,6 +5,7 @@ import type { RankedArtist } from './types.ts';
 const base: RankedArtist = {
   id: 1,
   name: 'Answer',
+  spotifyId: null,
   debutYear: 2000,
   members: 4,
   gender: 'male',

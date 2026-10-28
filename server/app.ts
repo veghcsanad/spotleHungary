@@ -1,9 +1,10 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { artistHints, compareArtists, HINT_UNLOCK_AFTER, MAX_GUESSES } from '../shared/game.ts';
+import { artistHints, compareArtists, HINT_UNLOCK_AFTER, KNOWN_GENRES, MAX_GUESSES } from '../shared/game.ts';
 import {
   HINT_SLOTS,
+  HINT_TYPES,
   REGIONS,
   type Answer,
   type ArtistOption,
@@ -12,13 +13,23 @@ import {
   type RankedArtist,
 } from '../shared/types.ts';
 import type { ArtistInput, ArtistRepository } from './db.ts';
+import type { Enricher } from './enrich.ts';
 import { dailyNumber, dateForNumber, parsePuzzleId, pickAnswer, type ParsedPuzzle } from './puzzle.ts';
 
 export interface AppOptions {
   now?: () => Date;
   adminToken?: string;
   staticDir?: string;
+  /** Spotify/Wikipedia/AI lookups for the admin portal (disabled when omitted). */
+  enricher?: Enricher | null;
+  /** When set, every admin change is also written to this seed JSON file (data/artists.json). */
+  exportPath?: string;
 }
+
+/** Express 4 does not catch rejected promises from async handlers. */
+const asyncHandler =
+  (fn: (req: Request, res: Response) => Promise<void>) => (req: Request, res: Response, next: NextFunction) =>
+    fn(req, res).catch(next);
 
 class HttpError extends Error {
   constructor(
@@ -60,8 +71,13 @@ export function validateArtistInput(body: unknown): ArtistInput {
     hints[`hint${slot}Type`] = type;
     hints[`hint${slot}`] = value;
   }
+  const spotifyId = optStr('spotifyId');
+  if (spotifyId !== null && !/^[0-9A-Za-z]{22}$/.test(spotifyId)) {
+    throw new HttpError(400, '"spotifyId" must be a 22-character Spotify artist id (or null)');
+  }
   return {
     name: str('name'),
+    spotifyId,
     debutYear: optInt('debutYear', 1900),
     members: optInt('members', 1),
     gender,
@@ -185,21 +201,69 @@ export function createApp(repo: ArtistRepository, options: AppOptions = {}) {
     if (!artist) throw new HttpError(404, 'Artist not found');
     res.json(artist);
   });
+  const persist = () => {
+    if (options.exportPath) repo.exportToFile(options.exportPath);
+  };
   admin.post('/artists', (req, res) => {
-    res.status(201).json(repo.create(validateArtistInput(req.body)));
+    const artist = repo.create(validateArtistInput(req.body));
+    persist();
+    res.status(201).json(artist);
   });
   admin.put('/artists/:id', (req, res) => {
     const artist = repo.update(idParam(req), validateArtistInput(req.body));
     if (!artist) throw new HttpError(404, 'Artist not found');
+    persist();
     res.json(artist);
   });
   admin.delete('/artists/:id', (req, res) => {
     if (!repo.delete(idParam(req))) throw new HttpError(404, 'Artist not found');
+    persist();
     res.json({ result: 'successfully deleted' });
   });
   admin.post('/reseed', (_req, res) => {
     res.json({ seeded: repo.seedFromFile() });
   });
+
+  // --- Admin portal helpers: vocabularies, Spotify search and AI-assisted proposals ---
+  const enricher = options.enricher ?? null;
+  admin.get(
+    '/meta',
+    asyncHandler(async (_req, res) => {
+      res.json({
+        regions: REGIONS,
+        hintTypes: HINT_TYPES,
+        genres: KNOWN_GENRES,
+        persistsToFile: Boolean(options.exportPath),
+        spotify: Boolean(enricher?.spotify),
+        spotifyLimited: enricher?.spotify?.rateLimited ?? null,
+        ai: enricher?.ai ? await enricher.ai.status() : { available: false, message: 'AI nincs beállítva' },
+      });
+    }),
+  );
+  admin.get(
+    '/spotify/search',
+    asyncHandler(async (req, res) => {
+      if (!enricher?.spotify) throw new HttpError(503, 'Spotify is not configured');
+      try {
+        res.json(await enricher.spotify.search(String(req.query.q ?? '')));
+      } catch (err) {
+        throw new HttpError(502, (err as Error).message);
+      }
+    }),
+  );
+  /** Body: `{ artistId?, name?, spotifyId?, ai?: boolean }`. Returns suggestions; nothing is saved. */
+  admin.post(
+    '/propose',
+    asyncHandler(async (req, res) => {
+      if (!enricher) throw new HttpError(503, 'Lookups are not configured');
+      const body = (req.body ?? {}) as { artistId?: number; name?: string; spotifyId?: string; ai?: boolean };
+      const artist = body.artistId != null ? repo.get(Number(body.artistId)) : null;
+      if (body.artistId != null && !artist) throw new HttpError(404, 'Artist not found');
+      if (!artist && !body.name?.trim() && !body.spotifyId) throw new HttpError(400, 'artistId, name or spotifyId is required');
+      if (body.spotifyId && !/^[0-9A-Za-z]{22}$/.test(body.spotifyId)) throw new HttpError(400, 'Invalid spotifyId');
+      res.json(await enricher.propose({ artist, name: body.name, spotifyId: body.spotifyId, useAi: Boolean(body.ai) }));
+    }),
+  );
   app.use('/api/admin', admin);
 
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Not found')));
@@ -207,6 +271,8 @@ export function createApp(repo: ArtistRepository, options: AppOptions = {}) {
   const staticDir = options.staticDir ?? resolve(process.cwd(), 'dist');
   if (existsSync(staticDir)) {
     app.use(express.static(staticDir));
+    const adminPage = resolve(staticDir, 'admin.html');
+    app.get('/admin', (_req, res, next) => (existsSync(adminPage) ? res.sendFile(adminPage) : next()));
     app.get('*', (_req, res) => res.sendFile(resolve(staticDir, 'index.html')));
   }
 

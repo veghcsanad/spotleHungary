@@ -37,6 +37,8 @@ export type HintSlot = (typeof HINT_SLOTS)[number];
 export interface Artist {
   id: number;
   name: string;
+  /** Spotify artist id (used by the admin portal for lookups). */
+  spotifyId: string | null;
   debutYear: number | null;
   /** 1 = solo artist */
   members: number | null;

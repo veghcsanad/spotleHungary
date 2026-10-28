@@ -34,6 +34,11 @@ export const GENRE_FAMILIES: Record<string, string[]> = {
   jazz: ['Jazz', 'Blues', 'Soul', 'R&B'],
 };
 
+/** Every genre that belongs to a family (the vocabulary offered by the admin portal and the AI fill). */
+export const KNOWN_GENRES: string[] = [...new Set(Object.values(GENRE_FAMILIES).flat())].sort((a, b) =>
+  a.localeCompare(b, 'hu'),
+);
+
 function direction(guess: number, answer: number): Direction {
   if (answer > guess) return 'higher';
   if (answer < guess) return 'lower';

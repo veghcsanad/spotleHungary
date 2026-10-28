@@ -1,6 +1,6 @@
 import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import { createRequire } from 'node:module';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Artist, RankedArtist } from '../shared/types.ts';
@@ -14,7 +14,7 @@ export const DEFAULT_DB_PATH = resolve(ROOT, 'data', 'spotle.db');
 export const SEED_PATH = resolve(ROOT, 'data', 'artists.json');
 
 /** Bump when the schema changes; older databases are migrated in `migrate()`. */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS artist (
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS artist (
   hint2             TEXT,
   hint3_type        TEXT,
   hint3             TEXT,
-  last_checked      TEXT    NOT NULL DEFAULT (datetime('now'))
+  last_checked      TEXT    NOT NULL DEFAULT (datetime('now')),
+  spotify_id        TEXT
 );
 `;
 
@@ -57,12 +58,14 @@ interface ArtistRow {
   hint2: string | null;
   hint3_type: string | null;
   hint3: string | null;
+  spotify_id: string | null;
   rank: number;
 }
 
 const toArtist = (r: ArtistRow): RankedArtist => ({
   id: r.id,
   name: r.name,
+  spotifyId: r.spotify_id,
   debutYear: r.debut_year,
   members: r.members,
   gender: r.gender,
@@ -85,8 +88,10 @@ const RANKED_SELECT = `
   FROM artist
 `;
 
-const COLUMNS =
+/** Columns that existed in schema v2/v3 (used when rebuilding older tables). */
+const V3_COLUMNS =
   'name, debut_year, members, gender, genre, city, region, monthly_listeners, image_url, hint1_type, hint1, hint2_type, hint2, hint3_type, hint3';
+const COLUMNS = `${V3_COLUMNS}, spotify_id`;
 
 const values = (a: ArtistInput) =>
   [
@@ -105,6 +110,7 @@ const values = (a: ArtistInput) =>
     a.hint2 ?? null,
     a.hint3Type ?? null,
     a.hint3 ?? null,
+    a.spotifyId ?? null,
   ] as const;
 
 export class ArtistRepository {
@@ -139,9 +145,13 @@ export class ArtistRepository {
       this.db.exec(`BEGIN;
         ALTER TABLE artist RENAME TO artist_v2;
         ${SCHEMA}
-        INSERT INTO artist (id, ${COLUMNS}, last_checked) SELECT id, ${COLUMNS}, last_checked FROM artist_v2;
+        INSERT INTO artist (id, ${V3_COLUMNS}, last_checked) SELECT id, ${V3_COLUMNS}, last_checked FROM artist_v2;
         DROP TABLE artist_v2;
         COMMIT;`);
+    }
+    if (hasTable && version < 4) {
+      const cols = (this.db.prepare('PRAGMA table_info(artist)').all() as { name: string }[]).map((c) => c.name);
+      if (!cols.includes('spotify_id')) this.db.exec('ALTER TABLE artist ADD COLUMN spotify_id TEXT');
     }
     this.db.exec(SCHEMA);
     this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
@@ -195,6 +205,33 @@ export class ArtistRepository {
       this.db.exec('ROLLBACK');
       throw err;
     }
+    return artists.length;
+  }
+
+  /**
+   * Writes all artists (in id order, without ids/ranks) to the seed JSON file, so that
+   * admin edits end up in `data/artists.json` — the source of the static GitHub Pages build.
+   */
+  exportToFile(path = SEED_PATH): number {
+    const artists = this.list().map((a) => ({
+      name: a.name,
+      spotifyId: a.spotifyId,
+      debutYear: a.debutYear,
+      members: a.members,
+      gender: a.gender,
+      genre: a.genre,
+      city: a.city,
+      region: a.region,
+      monthlyListeners: a.monthlyListeners,
+      imageUrl: a.imageUrl,
+      hint1Type: a.hint1Type,
+      hint1: a.hint1,
+      hint2Type: a.hint2Type,
+      hint2: a.hint2,
+      hint3Type: a.hint3Type,
+      hint3: a.hint3,
+    }));
+    writeFileSync(path, JSON.stringify(artists, null, 2) + '\n', 'utf8');
     return artists.length;
   }
 }
