@@ -145,7 +145,7 @@ export default function App() {
             puzzleNumber: puzzle.puzzleNumber,
             guesses: game.guesses,
             won: game.status === 'won',
-            url: window.location.origin,
+            url: window.location.origin + import.meta.env.BASE_URL,
           })
         : '',
     [game, puzzle],

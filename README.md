@@ -43,7 +43,20 @@ npm test           # unit + API tests (vitest)
 npm run build      # typecheck + production build into dist/
 npm start          # serve API + built client on http://localhost:3001 (PORT env to change)
 npm run db:seed    # reset the database from data/artists.json (or: npm run db:seed -- path/to/file.json)
+npm run build:pages # static build for GitHub Pages (no server needed, see below)
 ```
+
+## GitHub Pages
+
+GitHub Pages only serves static files, so it can't run the Express API (and the repository's `index.html`
+is the unbuilt Vite entry point – serving it directly gives a blank page). `npm run build:pages` builds
+in `pages` mode: the game logic runs in the browser ([`src/staticApi.ts`](src/staticApi.ts), bundled with
+`data/artists.json`) and assets are served from `/spotleHungary/` (override with `VITE_BASE`).
+
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) tests, builds and deploys on every push to
+`main`. In the repository settings set **Pages → Build and deployment → Source** to **GitHub Actions**.
+Note that in the static build the artist data (including answers) is visible to anyone who inspects
+the page; the admin API is not available.
 
 ## Artist data
 

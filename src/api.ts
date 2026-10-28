@@ -12,7 +12,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export const api = {
+const remoteApi = {
   artists: () => request<ArtistOption[]>('/artists'),
   daily: () => request<PuzzleInfo>('/puzzles/daily'),
   newPractice: () => request<PuzzleInfo>('/puzzles/practice'),
@@ -27,3 +27,20 @@ export const api = {
     request<RevealedHint>(`/puzzles/${encodeURIComponent(id)}/hints/${slot}?guesses=${guesses}`),
   answer: (id: string) => request<Answer>(`/puzzles/${encodeURIComponent(id)}/answer`),
 };
+
+/**
+ * The `pages` build (GitHub Pages) runs the game in the browser instead of calling the Express API.
+ * The static implementation is imported lazily so the normal build doesn't ship the artist data.
+ */
+type Api = typeof remoteApi;
+function staticApiProxy(): Api {
+  const load = () => import('./staticApi.ts').then((m) => m.staticApi);
+  return Object.fromEntries(
+    Object.keys(remoteApi).map((key) => [
+      key,
+      (...args: unknown[]) => load().then((s) => (s[key as keyof Api] as (...a: unknown[]) => unknown)(...args)),
+    ]),
+  ) as Api;
+}
+
+export const api: Api = import.meta.env.MODE === 'pages' ? staticApiProxy() : remoteApi;
